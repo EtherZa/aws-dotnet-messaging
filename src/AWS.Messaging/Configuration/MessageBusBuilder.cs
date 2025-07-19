@@ -99,13 +99,23 @@ public class MessageBusBuilder : IMessageBusBuilder
     public IMessageBusBuilder AddMessageHandler<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] THandler, TMessage>(string? messageTypeIdentifier = null)
         where THandler : IMessageHandler<TMessage>
     {
-        return AddMessageHandler(typeof(THandler), typeof(TMessage), () => new MessageEnvelope<TMessage>(), messageTypeIdentifier);
+        var subscriberMapping = SubscriberMapping.Create<THandler, TMessage>(messageTypeIdentifier);
+        _messageConfiguration.SubscriberMappings.Add(subscriberMapping);
+        return this;
     }
 
-    private IMessageBusBuilder AddMessageHandler([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] Type handlerType, Type messageType, Func<MessageEnvelope> envelopeFactory, string? messageTypeIdentifier = null)
+    private IMessageBusBuilder AddMessageHandler([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] Type handlerType, Type messageType, Func<MessageEnvelope> envelopeFactory, MethodInfo middlewareInvokeAsyncMethodInfo, string? messageTypeIdentifier = null)
     {
-        var subscriberMapping = new SubscriberMapping(handlerType, messageType, envelopeFactory, messageTypeIdentifier);
+        var subscriberMapping = new SubscriberMapping(handlerType, messageType, envelopeFactory, middlewareInvokeAsyncMethodInfo, messageTypeIdentifier);
         _messageConfiguration.SubscriberMappings.Add(subscriberMapping);
+        return this;
+    }
+
+    public IMessageBusBuilder AddMiddleware<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TMiddleware>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
+        where TMiddleware : class, IMiddleware
+    {
+        var subscriberMiddleware = SubscriberMiddleware.Create<TMiddleware>(serviceLifetime);
+        _messageConfiguration.SubscriberMiddleware.Add(subscriberMiddleware);
         return this;
     }
 
@@ -216,6 +226,11 @@ public class MessageBusBuilder : IMessageBusBuilder
 
         if (settings.MessageHandlers != null)
         {
+            // This is not Native AOT compatible but the method in general is marked
+            // as not being Native AOT compatible due to loading dynamic types. So this
+            // not being Native AOT compatible is okay.
+            var middlewareInvokeMethod = typeof(IMiddleware).GetMethod(nameof(IMiddleware.InvokeAsync))!;
+
             foreach (var messageHandler in settings.MessageHandlers)
             {
                 var messageType = GetTypeFromAssemblies(callingAssembly, messageHandler.MessageType)
@@ -238,7 +253,12 @@ public class MessageBusBuilder : IMessageBusBuilder
                     return (MessageEnvelope)envelope;
                 }
 
-                AddMessageHandler(handlerType, messageType, envelopeFactory, messageHandler.MessageTypeIdentifier);
+                // MakeGenericMethod is not Native AOT compatible but the method in general is marked
+                // as not being Native AOT compatible due to loading dynamic types. So this
+                // method not being Native AOT compatible is okay.
+                var middlewareInvokeAsyncMethodInfo = middlewareInvokeMethod.MakeGenericMethod(messageType);
+
+                AddMessageHandler(handlerType, messageType, envelopeFactory, middlewareInvokeAsyncMethodInfo, messageHandler.MessageTypeIdentifier);
             }
         }
 
@@ -377,6 +397,11 @@ public class MessageBusBuilder : IMessageBusBuilder
             foreach (var subscriberMapping in _messageConfiguration.SubscriberMappings)
             {
                 _serviceCollection.TryAddScoped(subscriberMapping.HandlerType);
+            }
+
+            foreach (var subscriberMiddleware in _messageConfiguration.SubscriberMiddleware)
+            {
+                _serviceCollection.TryAdd(new ServiceDescriptor(subscriberMiddleware.Type, subscriberMiddleware.Type, subscriberMiddleware.ServiceLifetime));
             }
         }
 
