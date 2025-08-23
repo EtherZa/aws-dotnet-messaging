@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using AWS.Messaging.Configuration;
 using AWS.Messaging.Services;
@@ -117,7 +118,7 @@ public class HandlerInvokerTests
 
         await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
 
-        mockLogger.VerifyLogError(typeof(CustomHandlerException), "A handler exception occurred while handling message ID 123.");
+        mockLogger.VerifyLogError(typeof(CustomHandlerException), "An unexpected exception occurred while handling message ID 123.");
     }
 
     /// <summary>
@@ -220,8 +221,11 @@ public class HandlerInvokerTests
         Assert.Equal(1, ChatMessageHandlerWithDisposableServices.TestDisposableServiceAsync.CallCount);
     }
 
+    /// <summary>
+    /// Tests that middleware is executed in the order of registration.
+    /// </summary>
     [Fact]
-    public async Task HandlerInvoker_Middleware_IsExecutedInOrderOfRegistration()
+    public async Task Middleware_IsExecutedInOrderOfRegistration()
     {
         var serviceCollection = new ServiceCollection()
             .AddAWSMessageBus(builder =>
@@ -257,8 +261,11 @@ public class HandlerInvokerTests
         Assert.Equal(typeof(SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>), middlewareTracker.Executed[3]);
     }
 
+    /// <summary>
+    /// Tests that middleware can propagate the message process status.
+    /// </summary>
     [Fact]
-    public async Task HandlerInvoker_Middleware_MessageProcessStatusIsPropagated()
+    public async Task Middleware_MessageProcessStatusIsPropagated()
     {
         var serviceCollection = new ServiceCollection()
             .AddAWSMessageBus(builder =>
@@ -294,26 +301,166 @@ public class HandlerInvokerTests
         Assert.Equal(typeof(SubscriberMiddlewareModels.FailMessageHandler<ChatMessage>), middlewareTracker.Executed[3]);
     }
 
-
-
+    /// <summary>
+    /// Tests that handlers that do not throw exceptions do not trigger the message error handler.
+    /// </summary>
     [Fact]
-    public async Task HandlerInvoker_Middleware_FailureDoesNotContinueChain()
+    public async Task MessageErrorHandler_HandlerWithoutException_DoesNotExecuteMessageErrorHandler()
     {
+        var mockMessageErrorHandler = new Mock<IMessageErrorHandler>();
+
         var serviceCollection = new ServiceCollection()
             .AddAWSMessageBus(builder =>
             {
-                builder.AddMessageHandler<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>("sqsQueueUrl");
-
-                builder.AddMiddleware<SubscriberMiddlewareModels.A>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.Error>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.B>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.C>();
+                builder.AddMessageHandler<ChatMessageHandler, ChatMessage>("sqsQueueUrl");
+                builder.AddAdditionalService(ServiceDescriptor.Singleton(mockMessageErrorHandler.Object));
             });
 
-        var middlewareTracker = new SubscriberMiddlewareModels.MiddlewareTracker();
-        serviceCollection.AddSingleton(middlewareTracker);
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        var handlerInvoker = new HandlerInvoker(
+            serviceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(serviceProvider),
+            new MessageConfiguration());
+
+        var envelope = new MessageEnvelope<ChatMessage>();
+        var subscriberMapping = SubscriberMapping.Create<ChatMessageHandler, ChatMessage>();
+        var messageProcessStatus = await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+
+        Assert.Equal(MessageProcessStatus.Success(), messageProcessStatus);
+        mockMessageErrorHandler.Verify(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// Tests that when the message error handler returns a failed response, the handler does not retry and that response is returned by the invoker.
+    /// </summary>
+    [Fact]
+    public async Task MessageErrorHandler_WithFailed_DoesNotRetry()
+    {
+        var mockMessageErrorHandler = new Mock<IMessageErrorHandler>();
+        mockMessageErrorHandler.Setup(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns(ValueTask.FromResult(MessageErrorHandlerResponse.Failed));
+
+        var serviceCollection = new ServiceCollection()
+            .AddAWSMessageBus(builder =>
+            {
+                builder.AddMessageHandler<ChatExceptionHandler, ChatMessage>("sqsQueueUrl");
+                builder.AddAdditionalService(ServiceDescriptor.Singleton(mockMessageErrorHandler.Object));
+            });
 
         var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        var handlerInvoker = new HandlerInvoker(
+            serviceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(serviceProvider),
+            new MessageConfiguration());
+
+        var envelope = new MessageEnvelope<ChatMessage>();
+        var subscriberMapping = SubscriberMapping.Create<ChatExceptionHandler, ChatMessage>();
+        var messageProcessStatus = await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+
+        Assert.Equal(MessageProcessStatus.Failed(), messageProcessStatus);
+        mockMessageErrorHandler.Verify(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// Tests that when the message error handler returns a success response, the handler does not retry and that response is returned by the invoker.
+    /// </summary>
+    [Fact]
+    public async Task MessageErrorHandler_WithSuccess_DoesNotRetry()
+    {
+        var mockMessageErrorHandler = new Mock<IMessageErrorHandler>();
+        mockMessageErrorHandler.Setup(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns(ValueTask.FromResult(MessageErrorHandlerResponse.Success));
+
+        var serviceCollection = new ServiceCollection()
+            .AddAWSMessageBus(builder =>
+            {
+                builder.AddMessageHandler<ChatExceptionHandler, ChatMessage>("sqsQueueUrl");
+                builder.AddAdditionalService(ServiceDescriptor.Singleton(mockMessageErrorHandler.Object));
+            });
+
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        var handlerInvoker = new HandlerInvoker(
+            serviceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(serviceProvider),
+            new MessageConfiguration());
+
+        var envelope = new MessageEnvelope<ChatMessage>();
+        var subscriberMapping = SubscriberMapping.Create<ChatExceptionHandler, ChatMessage>();
+        var messageProcessStatus = await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+
+        Assert.Equal(MessageProcessStatus.Success(), messageProcessStatus);
+        mockMessageErrorHandler.Verify(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// Tests that when the message error handler returns a retry response, the pipeline is re-executed.
+    /// </summary>
+    [Fact]
+    public async Task MessageErrorHandler_WithRetry_ReExecutesPipeline()
+    {
+        var mockMessageErrorHandler = new Mock<IMessageErrorHandler>();
+        mockMessageErrorHandler.SetupSequence(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns(ValueTask.FromResult(MessageErrorHandlerResponse.Retry))
+            .Returns(ValueTask.FromResult(MessageErrorHandlerResponse.Retry))
+            .Returns(ValueTask.FromResult(MessageErrorHandlerResponse.Success));
+
+        var serviceCollection = new ServiceCollection()
+            .AddAWSMessageBus(builder =>
+            {
+                builder.AddMessageHandler<ChatExceptionHandler, ChatMessage>("sqsQueueUrl");
+                builder.AddAdditionalService(ServiceDescriptor.Singleton(mockMessageErrorHandler.Object));
+            });
+
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        var handlerInvoker = new HandlerInvoker(
+            serviceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(serviceProvider),
+            new MessageConfiguration());
+
+        var envelope = new MessageEnvelope<ChatMessage>();
+        var subscriberMapping = SubscriberMapping.Create<ChatExceptionHandler, ChatMessage>();
+        var messageProcessStatus = await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+
+        Assert.Equal(MessageProcessStatus.Success(), messageProcessStatus);
+        mockMessageErrorHandler.Verify(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), 1, It.IsAny<CancellationToken>()), Times.Once);
+        mockMessageErrorHandler.Verify(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), 2, It.IsAny<CancellationToken>()), Times.Once);
+        mockMessageErrorHandler.Verify(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), 3, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// Tests that when the message error handler returns a retry response, the pipeline is executed in a new DI scope.
+    /// </summary>
+    [Fact]
+    public async Task MessageErrorHandler_Retry_UsesNewScope()
+    {
+        var mockMessageErrorHandler = new Mock<IMessageErrorHandler>();
+        mockMessageErrorHandler.SetupSequence(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns(ValueTask.FromResult(MessageErrorHandlerResponse.Retry))
+            .Returns(ValueTask.FromResult(MessageErrorHandlerResponse.Retry))
+            .Returns(ValueTask.FromResult(MessageErrorHandlerResponse.Success));
+
+        var serviceCollection = new ServiceCollection()
+           .AddAWSMessageBus(builder =>
+           {
+               builder.AddMessageHandler<ChatExceptionHandlerAndDisposableServices, ChatMessage>();
+               builder.AddAdditionalService(ServiceDescriptor.Singleton(mockMessageErrorHandler.Object));
+           });
+
+        serviceCollection.AddScoped<ChatExceptionHandlerAndDisposableServices.TestDisposableService, ChatExceptionHandlerAndDisposableServices.TestDisposableService>();
+        serviceCollection.AddScoped<ChatExceptionHandlerAndDisposableServices.TestDisposableServiceAsync, ChatExceptionHandlerAndDisposableServices.TestDisposableServiceAsync>();
+
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        ChatExceptionHandlerAndDisposableServices.TestDisposableService.CallCount = 0;
+        ChatExceptionHandlerAndDisposableServices.TestDisposableServiceAsync.CallCount = 0;
 
         var handlerInvoker = new HandlerInvoker(
             serviceProvider,
@@ -322,13 +469,11 @@ public class HandlerInvokerTests
             serviceProvider.GetRequiredService<IMessageConfiguration>());
 
         var envelope = new MessageEnvelope<ChatMessage>();
-        var subscriberMapping = SubscriberMapping.Create<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>();
-        var messageProcessStatus = await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+        var subscriberMapping = SubscriberMapping.Create<ChatExceptionHandlerAndDisposableServices, ChatMessage>();
+        await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
 
-        Assert.Equal(MessageProcessStatus.Failed(), messageProcessStatus);
-
-        Assert.Equal(2, middlewareTracker.Executed.Count);
-        Assert.Equal(typeof(SubscriberMiddlewareModels.A), middlewareTracker.Executed[0]);
-        Assert.Equal(typeof(SubscriberMiddlewareModels.Error), middlewareTracker.Executed[1]);
+        mockMessageErrorHandler.Verify(x => x.OnHandleError(It.IsAny<MessageEnvelope<ChatMessage>>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+        Assert.Equal(3, ChatExceptionHandlerAndDisposableServices.TestDisposableService.CallCount);
+        Assert.Equal(3, ChatExceptionHandlerAndDisposableServices.TestDisposableServiceAsync.CallCount);
     }
 }
