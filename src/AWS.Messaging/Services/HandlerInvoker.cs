@@ -1,7 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-using System.Collections.Concurrent;
 using System.Reflection;
 using AWS.Messaging.Configuration;
 using AWS.Messaging.Telemetry;
@@ -18,11 +17,7 @@ public class HandlerInvoker : IHandlerInvoker
     private readonly ITelemetryFactory _telemetryFactory;
     private readonly IMessageConfiguration _messageConfiguration;
 
-    /// <summary>
-    /// Caches the <see cref="MethodInfo"/> of the <see cref="IMessageHandler{T}.HandleAsync(MessageEnvelope{T}, CancellationToken)"/>
-    /// method that will be invoked with the message envelope for each handler
-    /// </summary>
-    private readonly ConcurrentDictionary<Type, MethodInfo?> _handlerMethods = new();
+    private bool? _messageErrorHandlerRegistered = null;
 
     /// <summary>
     /// Constructs an instance of HandlerInvoker
@@ -43,8 +38,14 @@ public class HandlerInvoker : IHandlerInvoker
         _messageConfiguration = messageConfiguration;
     }
 
+    public Task<MessageProcessStatus> InvokeAsync(MessageEnvelope messageEnvelope, SubscriberMapping subscriberMapping, CancellationToken token = default)
+    {
+        // redirect to the generic version of InvokeAsync
+        return subscriberMapping.HandlerInvoker(this, messageEnvelope, subscriberMapping, token);
+    }
+
     /// <inheritdoc/>
-    public async Task<MessageProcessStatus> InvokeAsync(MessageEnvelope messageEnvelope, SubscriberMapping subscriberMapping, CancellationToken token = default)
+    public async Task<MessageProcessStatus> InvokeAsync<T>(MessageEnvelope<T> messageEnvelope, SubscriberMapping subscriberMapping, CancellationToken token = default)
     {
         using (var trace = _telemetryFactory.Trace("Processing message", messageEnvelope))
         {
@@ -58,60 +59,86 @@ public class HandlerInvoker : IHandlerInvoker
                     trace.AddMetadata(TelemetryKeys.SqsMessageId, messageEnvelope.SQSMetadata.MessageID);
                 }
 
-                await using (var scope = _serviceProvider.CreateAsyncScope())
+                var attempt = 0;
+                while (true)
                 {
-                    object handler;
                     try
                     {
-                        handler = scope.ServiceProvider.GetRequiredService(subscriberMapping.HandlerType);
-                    }
-                    catch (Exception e)
-                    {
-                        _logger.LogError("Unable to resolve a handler for {HandlerType} while handling message ID {MessageEnvelopeId}.", subscriberMapping.HandlerType, messageEnvelope.Id);
-                        throw new InvalidMessageHandlerSignatureException($"Unable to resolve a handler for {subscriberMapping.HandlerType} " +
-                                                                          $"while handling message ID {messageEnvelope.Id}.", e);
-                    }
-
-                    var method = _handlerMethods.GetOrAdd(subscriberMapping.MessageType, x =>
-                    {
-                        return subscriberMapping.HandlerType.GetMethod(    // Look up the method on the handler type with:
-                            nameof(IMessageHandler<MessageProcessStatus>.HandleAsync),              // name "HandleAsync"
-                            new Type[] { messageEnvelope.GetType(), typeof(CancellationToken) });   // parameters (MessageEnvelope<MessageType>, CancellationToken)
-                    });
-
-                    if (method == null)
-                    {
-                        _logger.LogError("Unable to resolve a compatible HandleAsync method for {HandlerType} while handling message ID {MessageEnvelopeId}.", subscriberMapping.HandlerType, messageEnvelope.Id);
-                        throw new InvalidMessageHandlerSignatureException($"Unable to resolve a compatible HandleAsync method for {subscriberMapping.HandlerType} while handling message ID {messageEnvelope.Id}.");
-                    }
-
-                    try
-                    {
-                        var middlewares = _messageConfiguration.SubscriberMiddleware.Select(subscriberMiddleware => (IMiddleware)scope.ServiceProvider.GetRequiredService(subscriberMiddleware.Type)!).ToList();
-                        return await ExecutePipelineAsync(messageEnvelope, subscriberMapping, middlewares, handler, method, subscriberMapping.MiddlewareInvokeAsyncMethodInfo, token).ConfigureAwait(false);
-                    }
-                    // Since we are invoking HandleAsync via reflection, we need to unwrap the TargetInvocationException
-                    // containing application exceptions that happened inside the IMessageHandler
-                    catch (TargetInvocationException ex)
-                    {
-                        trace.AddException(ex, false);
-
-                        if (ex.InnerException != null)
+                        await using (var scope = _serviceProvider.CreateAsyncScope())
                         {
-                            _logger.LogError(ex.InnerException, "A handler exception occurred while handling message ID {MessageId}.", messageEnvelope.Id);
-                            return MessageProcessStatus.Failed();
+                            IMessageHandler<T> handler;
+                            try
+                            {
+                                handler = (IMessageHandler<T>)scope.ServiceProvider.GetRequiredService(subscriberMapping.HandlerType);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Unable to resolve a handler for {HandlerType} while handling message ID {MessageEnvelopeId}.", subscriberMapping.HandlerType, messageEnvelope.Id);
+                                throw new InvalidMessageHandlerSignatureException($"Unable to resolve a handler for {subscriberMapping.HandlerType} while handling message ID {messageEnvelope.Id}.", ex);
+                            }
+
+                            var middlewares = _messageConfiguration.SubscriberMiddleware.Select(type => (IMiddleware)scope.ServiceProvider.GetRequiredService(type.Type)!).ToList();
+                            return await ExecutePipelineAsync(messageEnvelope, middlewares, handler, token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (Exception ex) when (ex is not InvalidMessageHandlerSignatureException)
+                    {
+                        if (ex is TargetInvocationException targetInvocationException)
+                        {
+                            // Since we are invoking HandleAsync via reflection, we need to unwrap the TargetInvocationException
+                            // containing application exceptions that happened inside the IMessageHandler
+                            if (targetInvocationException.InnerException != null)
+                            {
+                                ex = targetInvocationException.InnerException;
+                            }
                         }
                         else
                         {
-                            _logger.LogError(ex, "An unexpected exception occurred while handling message ID {MessageId}.", messageEnvelope.Id);
-                            return MessageProcessStatus.Failed();
+                            trace.AddException(ex, false);
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        trace.AddException(ex, false);
 
                         _logger.LogError(ex, "An unexpected exception occurred while handling message ID {MessageId}.", messageEnvelope.Id);
+
+                        // do not attempt to use IMessageErrorHandler if it wasn't available previously
+                        if (_messageErrorHandlerRegistered != false)
+                        {
+                            await using var scope = _serviceProvider.CreateAsyncScope();
+                            try
+                            {
+                                var retryHandler = scope.ServiceProvider.GetService<IMessageErrorHandler>();
+
+                                if (!_messageErrorHandlerRegistered.HasValue && retryHandler != null)
+                                {
+                                    _messageErrorHandlerRegistered = true;
+                                }
+
+                                if (_messageErrorHandlerRegistered == true)
+                                {
+                                    switch (await retryHandler!.OnHandleError(messageEnvelope, ex, ++attempt, token))
+                                    {
+                                        case MessageErrorHandlerResponse.Failed:
+                                            _logger.LogError(ex, "An unexpected exception occurred while determining if message ID {MessageId} should be retried.", messageEnvelope.Id);
+                                            return MessageProcessStatus.Failed();
+
+                                        case MessageErrorHandlerResponse.Success:
+                                            return MessageProcessStatus.Success();
+
+                                        case MessageErrorHandlerResponse.Retry:
+                                            trace.AddMetadata(TelemetryKeys.Retry, attempt);
+                                            continue;
+
+                                        default:
+                                            throw new NotImplementedException();
+                                    }
+                                }
+                            }
+                            catch (Exception retryException)
+                            {
+                                _logger.LogError(retryException, "An unexpected exception occurred while determining if message ID {MessageId} should be retried.", messageEnvelope.Id);
+                                return MessageProcessStatus.Failed();
+                            }
+                        }
+
                         return MessageProcessStatus.Failed();
                     }
                 }
@@ -124,41 +151,15 @@ public class HandlerInvoker : IHandlerInvoker
         }
     }
 
-    private async Task<MessageProcessStatus> ExecutePipelineAsync(
-        MessageEnvelope messageEnvelope,
-        SubscriberMapping subscriberMapping,
-        IReadOnlyList<IMiddleware> middlewares,
-        object handler,
-        MethodInfo handlerMethod,
-        MethodInfo middlewareMethod,
-        CancellationToken token)
+    private static async Task<MessageProcessStatus> ExecutePipelineAsync<T>(MessageEnvelope<T> messageEnvelope, List<IMiddleware> middlewares, IMessageHandler<T> handler, CancellationToken token)
     {
-        RequestDelegate next = () =>
-        {
-            if (handlerMethod.Invoke(handler, new object[] { messageEnvelope, token }) is not Task<MessageProcessStatus> task)
-            {
-                _logger.LogError("Unexpected return type for the HandleAsync method on {HandlerType} while handling message ID {MessageEnvelopeId}. Expected {ExpectedType}", subscriberMapping.HandlerType, messageEnvelope.Id, nameof(Task<MessageProcessStatus>));
-                throw new InvalidMessageHandlerSignatureException($"Unexpected return type for the HandleAsync method on {subscriberMapping.HandlerType} while handling message ID {messageEnvelope.Id}. Expected {nameof(Task<MessageProcessStatus>)}");
-            }
-
-            return task;
-        };
+        RequestDelegate next = () => handler.HandleAsync(messageEnvelope, token);
 
         for (var i = middlewares.Count - 1; i >= 0; i--)
         {
             var capturedNext = next;
             var middleware = middlewares[i];
-
-            next = () =>
-            {
-                if (middlewareMethod.Invoke(middleware, new object[] { messageEnvelope, capturedNext, token }) is not Task<MessageProcessStatus> task)
-                {
-                    _logger.LogError("Unexpected return type for the InvokeAsync method on {MiddlewareType} while handling message ID {MessageEnvelopeId}. Expected {ExpectedType}", middleware.GetType(), messageEnvelope.Id, nameof(Task<MessageProcessStatus>));
-                    throw new InvalidMessageHandlerSignatureException($"Unexpected return type for the InvokeAsync method on {middleware.GetType()} while handling message ID {messageEnvelope.Id}. Expected {nameof(Task<MessageProcessStatus>)}");
-                }
-
-                return task;
-            };
+            next = () => middleware.InvokeAsync(messageEnvelope, capturedNext, token);
         }
 
         return await next().ConfigureAwait(false);

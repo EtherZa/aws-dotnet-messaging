@@ -4,7 +4,7 @@
       "Name": "AWS.Messaging",
       "Type": "Minor",
       "ChangelogMessages": [
-        "Added subscriber middleware"
+        "Added subscriber middleware with optional retry on pipeline exception"
       ]
     }
   ]
