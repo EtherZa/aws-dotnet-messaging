@@ -301,6 +301,7 @@ public class MessageBusBuilder : IMessageBusBuilder
     /// <inheritdoc/>
     public IMessageBusBuilder AddAdditionalService(ServiceDescriptor serviceDescriptor)
     {
+        ArgumentNullException.ThrowIfNull(serviceDescriptor);
         _additionalServices.Add((_, services) => services.TryAdd(serviceDescriptor));
         return this;
     }
@@ -308,6 +309,7 @@ public class MessageBusBuilder : IMessageBusBuilder
     /// <inheritdoc/>
     public IMessageBusBuilder AddAdditionalService(Action<IMessageConfiguration, IServiceCollection> action)
     {
+        ArgumentNullException.ThrowIfNull(action);
         _additionalServices.Add(action);
         return this;
     }
