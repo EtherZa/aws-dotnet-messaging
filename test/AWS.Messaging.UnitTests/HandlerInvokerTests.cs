@@ -476,4 +476,196 @@ public class HandlerInvokerTests
         Assert.Equal(3, ChatExceptionHandlerAndDisposableServices.TestDisposableService.CallCount);
         Assert.Equal(3, ChatExceptionHandlerAndDisposableServices.TestDisposableServiceAsync.CallCount);
     }
+
+    /// <summary>
+    /// Tests that middleware works correctly with multiple message types, verifying the
+    /// delegate dispatch routes each type through the shared middleware to the correct handler.
+    /// </summary>
+    [Fact]
+    public async Task Middleware_WithMultipleMessageTypes_RoutesCorrectly()
+    {
+        var serviceCollection = new ServiceCollection()
+            .AddAWSMessageBus(builder =>
+            {
+                builder.AddMessageHandler<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>("chatMessage");
+                builder.AddMessageHandler<SubscriberMiddlewareModels.FailMessageHandler<AddressInfo>, AddressInfo>("addressInfo");
+
+                builder.AddMiddleware<SubscriberMiddlewareModels.A>();
+            });
+
+        var middlewareTracker = new SubscriberMiddlewareModels.MiddlewareTracker();
+        serviceCollection.AddSingleton(middlewareTracker);
+
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        var handlerInvoker = new HandlerInvoker(
+            serviceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(serviceProvider),
+            serviceProvider.GetRequiredService<IMessageConfiguration>());
+
+        // Process a ChatMessage - should route to SuccessMessageHandler
+        var chatEnvelope = new MessageEnvelope<ChatMessage>();
+        var chatMapping = SubscriberMapping.Create<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>();
+        var chatResult = await handlerInvoker.InvokeAsync(chatEnvelope, chatMapping);
+
+        Assert.Equal(MessageProcessStatus.Success(), chatResult);
+        Assert.Equal(2, middlewareTracker.Executed.Count);
+        Assert.Equal(typeof(SubscriberMiddlewareModels.A), middlewareTracker.Executed[0]);
+        Assert.Equal(typeof(SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>), middlewareTracker.Executed[1]);
+
+        // Process an AddressInfo - should route to FailMessageHandler through the same middleware
+        var addressEnvelope = new MessageEnvelope<AddressInfo>();
+        var addressMapping = SubscriberMapping.Create<SubscriberMiddlewareModels.FailMessageHandler<AddressInfo>, AddressInfo>();
+        var addressResult = await handlerInvoker.InvokeAsync(addressEnvelope, addressMapping);
+
+        Assert.Equal(MessageProcessStatus.Failed(), addressResult);
+        Assert.Equal(4, middlewareTracker.Executed.Count);
+        Assert.Equal(typeof(SubscriberMiddlewareModels.A), middlewareTracker.Executed[2]);
+        Assert.Equal(typeof(SubscriberMiddlewareModels.FailMessageHandler<AddressInfo>), middlewareTracker.Executed[3]);
+    }
+
+    /// <summary>
+    /// Tests that middleware can short-circuit the pipeline by returning a result without calling next().
+    /// Downstream middleware and the handler should NOT be executed.
+    /// </summary>
+    [Fact]
+    public async Task Middleware_ShortCircuit_DoesNotExecuteDownstream()
+    {
+        var serviceCollection = new ServiceCollection()
+            .AddAWSMessageBus(builder =>
+            {
+                builder.AddMessageHandler<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>("sqsQueueUrl");
+
+                builder.AddMiddleware<SubscriberMiddlewareModels.A>();
+                builder.AddMiddleware<SubscriberMiddlewareModels.ShortCircuit>();
+                builder.AddMiddleware<SubscriberMiddlewareModels.B>();
+            });
+
+        var middlewareTracker = new SubscriberMiddlewareModels.MiddlewareTracker();
+        serviceCollection.AddSingleton(middlewareTracker);
+
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        var handlerInvoker = new HandlerInvoker(
+            serviceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(serviceProvider),
+            serviceProvider.GetRequiredService<IMessageConfiguration>());
+
+        var envelope = new MessageEnvelope<ChatMessage>();
+        var subscriberMapping = SubscriberMapping.Create<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>();
+        var messageProcessStatus = await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+
+        Assert.Equal(MessageProcessStatus.Success(), messageProcessStatus);
+
+        // Only A and ShortCircuit should execute - B and the handler should NOT
+        Assert.Equal(2, middlewareTracker.Executed.Count);
+        Assert.Equal(typeof(SubscriberMiddlewareModels.A), middlewareTracker.Executed[0]);
+        Assert.Equal(typeof(SubscriberMiddlewareModels.ShortCircuit), middlewareTracker.Executed[1]);
+    }
+
+    /// <summary>
+    /// Tests that the cancellation token is propagated through the middleware pipeline.
+    /// </summary>
+    [Fact]
+    public async Task Middleware_CancellationToken_IsPropagatedThroughPipeline()
+    {
+        SubscriberMiddlewareModels.CancellationAwareMiddleware.Reset();
+
+        var serviceCollection = new ServiceCollection()
+            .AddAWSMessageBus(builder =>
+            {
+                builder.AddMessageHandler<ChatMessageHandler, ChatMessage>("sqsQueueUrl");
+                builder.AddMiddleware<SubscriberMiddlewareModels.CancellationAwareMiddleware>();
+            });
+
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        var handlerInvoker = new HandlerInvoker(
+            serviceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(serviceProvider),
+            serviceProvider.GetRequiredService<IMessageConfiguration>());
+
+        var envelope = new MessageEnvelope<ChatMessage>();
+        var subscriberMapping = SubscriberMapping.Create<ChatMessageHandler, ChatMessage>();
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel(); // Pre-cancel the token
+
+        // The cancelled token should be propagated to the middleware
+        // Note: the framework catches exceptions, so the cancelled token may result in Failed status
+        await handlerInvoker.InvokeAsync(envelope, subscriberMapping, cts.Token);
+
+        Assert.True(SubscriberMiddlewareModels.CancellationAwareMiddleware.TokenWasReceived, "Middleware should receive a non-default CancellationToken");
+        Assert.True(SubscriberMiddlewareModels.CancellationAwareMiddleware.TokenWasCancelled, "Middleware should see the token is cancelled");
+    }
+
+    /// <summary>
+    /// Tests that singleton middleware resolves the same instance across multiple invocations,
+    /// while scoped middleware resolves a new instance per invocation.
+    /// </summary>
+    [Fact]
+    public async Task Middleware_SingletonVsScoped_LifetimeBehavior()
+    {
+        SubscriberMiddlewareModels.InstanceTrackingMiddleware.Reset();
+
+        var serviceCollection = new ServiceCollection()
+            .AddAWSMessageBus(builder =>
+            {
+                builder.AddMessageHandler<ChatMessageHandler, ChatMessage>("sqsQueueUrl");
+
+                // Register as Scoped - each invocation should get a new DI scope and thus a new instance
+                builder.AddMiddleware<SubscriberMiddlewareModels.InstanceTrackingMiddleware>(ServiceLifetime.Scoped);
+            });
+
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+
+        var handlerInvoker = new HandlerInvoker(
+            serviceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(serviceProvider),
+            serviceProvider.GetRequiredService<IMessageConfiguration>());
+
+        var envelope = new MessageEnvelope<ChatMessage>();
+        var subscriberMapping = SubscriberMapping.Create<ChatMessageHandler, ChatMessage>();
+
+        // Invoke 3 times - each should create a new scope and thus a new scoped middleware instance
+        await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+        await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+        await handlerInvoker.InvokeAsync(envelope, subscriberMapping);
+
+        // With scoped lifetime, each invocation creates a new scope, so we should get different instance IDs
+        Assert.Equal(3, SubscriberMiddlewareModels.InstanceTrackingMiddleware.ResolvedInstanceIds.Count);
+        var uniqueIds = new HashSet<int>(SubscriberMiddlewareModels.InstanceTrackingMiddleware.ResolvedInstanceIds);
+        Assert.Equal(3, uniqueIds.Count); // 3 different instances for scoped
+
+        // Now test Singleton behavior
+        SubscriberMiddlewareModels.InstanceTrackingMiddleware.Reset();
+
+        var singletonServiceCollection = new ServiceCollection()
+            .AddAWSMessageBus(builder =>
+            {
+                builder.AddMessageHandler<ChatMessageHandler, ChatMessage>("sqsQueueUrl");
+                builder.AddMiddleware<SubscriberMiddlewareModels.InstanceTrackingMiddleware>(ServiceLifetime.Singleton);
+            });
+
+        var singletonServiceProvider = singletonServiceCollection.BuildServiceProvider();
+
+        var singletonInvoker = new HandlerInvoker(
+            singletonServiceProvider,
+            new NullLogger<HandlerInvoker>(),
+            new DefaultTelemetryFactory(singletonServiceProvider),
+            singletonServiceProvider.GetRequiredService<IMessageConfiguration>());
+
+        await singletonInvoker.InvokeAsync(envelope, subscriberMapping);
+        await singletonInvoker.InvokeAsync(envelope, subscriberMapping);
+        await singletonInvoker.InvokeAsync(envelope, subscriberMapping);
+
+        // With singleton lifetime, all invocations should resolve the same instance
+        Assert.Equal(3, SubscriberMiddlewareModels.InstanceTrackingMiddleware.ResolvedInstanceIds.Count);
+        var singletonUniqueIds = new HashSet<int>(SubscriberMiddlewareModels.InstanceTrackingMiddleware.ResolvedInstanceIds);
+        Assert.Single(singletonUniqueIds); // All same instance for singleton
+    }
 }

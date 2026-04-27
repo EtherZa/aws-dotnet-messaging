@@ -100,4 +100,74 @@ public static class SubscriberMiddlewareModels
             throw new Exception("Error in middleware");
         }
     }
+
+    /// <summary>
+    /// Middleware that short-circuits the pipeline by returning a result without calling next().
+    /// </summary>
+    public class ShortCircuit : IMiddleware
+    {
+        private readonly MiddlewareTracker _tracker;
+
+        public ShortCircuit(MiddlewareTracker tracker)
+        {
+            _tracker = tracker;
+        }
+
+        public Task<MessageProcessStatus> InvokeAsync<T>(MessageEnvelope<T> messageEnvelope, RequestDelegate next, CancellationToken cancellationToken = default)
+        {
+            _tracker.Add(this);
+            // Intentionally NOT calling next() - short-circuiting the pipeline
+            return Task.FromResult(MessageProcessStatus.Success());
+        }
+    }
+
+    /// <summary>
+    /// Middleware that tracks its instance ID to verify scoped vs singleton behavior.
+    /// </summary>
+    public class InstanceTrackingMiddleware : IMiddleware
+    {
+        private static int _instanceCounter;
+        public int InstanceId { get; }
+
+        public static List<int> ResolvedInstanceIds { get; } = new();
+
+        public InstanceTrackingMiddleware()
+        {
+            InstanceId = Interlocked.Increment(ref _instanceCounter);
+        }
+
+        public static void Reset()
+        {
+            _instanceCounter = 0;
+            ResolvedInstanceIds.Clear();
+        }
+
+        public Task<MessageProcessStatus> InvokeAsync<T>(MessageEnvelope<T> messageEnvelope, RequestDelegate next, CancellationToken cancellationToken = default)
+        {
+            ResolvedInstanceIds.Add(InstanceId);
+            return next();
+        }
+    }
+
+    /// <summary>
+    /// Middleware that verifies the cancellation token is received.
+    /// </summary>
+    public class CancellationAwareMiddleware : IMiddleware
+    {
+        public static bool TokenWasCancelled { get; set; }
+        public static bool TokenWasReceived { get; set; }
+
+        public static void Reset()
+        {
+            TokenWasCancelled = false;
+            TokenWasReceived = false;
+        }
+
+        public Task<MessageProcessStatus> InvokeAsync<T>(MessageEnvelope<T> messageEnvelope, RequestDelegate next, CancellationToken cancellationToken = default)
+        {
+            TokenWasReceived = cancellationToken != default;
+            TokenWasCancelled = cancellationToken.IsCancellationRequested;
+            return next();
+        }
+    }
 }
