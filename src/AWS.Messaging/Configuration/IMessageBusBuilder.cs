@@ -65,6 +65,16 @@ public interface IMessageBusBuilder
         where TMiddleware : class, IMiddleware;
 
     /// <summary>
+    /// Adds a message error handler to the subscriber pipeline.
+    /// The error handler is invoked when an exception occurs during message processing
+    /// and can control retry behavior, override results, or handle exceptions.
+    /// </summary>
+    /// <typeparam name="T">The type that implements <see cref="IMessageErrorHandler"/></typeparam>
+    /// <param name="serviceLifetime">The lifetime of the error handler.</param>
+    IMessageBusBuilder AddMessageErrorHandler<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] T>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
+        where T : IMessageErrorHandler;
+
+    /// <summary>
     /// Adds an SQS queue to poll for messages.
     /// </summary>
     /// <param name="queueUrl">The SQS queue to poll for messages.</param>

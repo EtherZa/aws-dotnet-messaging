@@ -112,8 +112,9 @@ public class MessageBusBuilder : IMessageBusBuilder
         return this;
     }
 
+    /// <inheritdoc/>
     public IMessageBusBuilder AddMessageErrorHandler<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] T>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
-        where T: IMessageErrorHandler
+        where T : IMessageErrorHandler
     {
         AddAdditionalService(new ServiceDescriptor(typeof(IMessageErrorHandler), typeof(T), serviceLifetime));
         return this;
