@@ -54,7 +54,7 @@ public static class SubscriberMiddlewareModels
         }
     }
 
-    public abstract class TrackedMiddleware : IMiddleware
+    public abstract class TrackedMiddleware : IHandlerMiddleware
     {
         private readonly MiddlewareTracker _tracker;
 
@@ -85,7 +85,7 @@ public static class SubscriberMiddlewareModels
         public C(MiddlewareTracker tracker) : base(tracker) { }
     }
 
-    public class Error : IMiddleware
+    public class Error : IHandlerMiddleware
     {
         private readonly MiddlewareTracker _tracker;
 
@@ -104,7 +104,7 @@ public static class SubscriberMiddlewareModels
     /// <summary>
     /// Middleware that short-circuits the pipeline by returning a result without calling next().
     /// </summary>
-    public class ShortCircuit : IMiddleware
+    public class ShortCircuit : IHandlerMiddleware
     {
         private readonly MiddlewareTracker _tracker;
 
@@ -124,7 +124,7 @@ public static class SubscriberMiddlewareModels
     /// <summary>
     /// Middleware that tracks its instance ID to verify scoped vs singleton behavior.
     /// </summary>
-    public class InstanceTrackingMiddleware : IMiddleware
+    public class InstanceTrackingMiddleware : IHandlerMiddleware
     {
         private static int _instanceCounter;
         public int InstanceId { get; }
@@ -152,7 +152,7 @@ public static class SubscriberMiddlewareModels
     /// <summary>
     /// Middleware that verifies the cancellation token is received.
     /// </summary>
-    public class CancellationAwareMiddleware : IMiddleware
+    public class CancellationAwareMiddleware : IHandlerMiddleware
     {
         public static bool TokenWasCancelled { get; set; }
         public static bool TokenWasReceived { get; set; }

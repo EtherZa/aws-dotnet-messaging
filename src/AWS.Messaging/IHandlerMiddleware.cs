@@ -6,7 +6,7 @@ namespace AWS.Messaging;
 /// <summary>
 /// This interface is implemented by the users of this library for each layer of middleware that should be processed.
 /// </summary>
-public interface IMiddleware
+public interface IHandlerMiddleware
 {
     /// <summary>
     /// Processes a message through the middleware pipeline, invoking the next middleware or the message handler.

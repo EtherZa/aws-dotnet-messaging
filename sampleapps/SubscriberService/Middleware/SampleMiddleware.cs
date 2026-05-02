@@ -5,7 +5,7 @@ using AWS.Messaging;
 
 namespace SubscriberService.Middleware;
 
-public class SampleMiddleware : IMiddleware
+public class SampleMiddleware : IHandlerMiddleware
 {
     public Task<MessageProcessStatus> InvokeAsync<T>(MessageEnvelope<T> messageEnvelope, RequestDelegate next, CancellationToken token = default)
     {

@@ -121,7 +121,7 @@ public class MessageBusBuilder : IMessageBusBuilder
     }
 
     public IMessageBusBuilder AddMiddleware<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TMiddleware>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
-        where TMiddleware : class, IMiddleware
+        where TMiddleware : class, IHandlerMiddleware
     {
         var subscriberMiddleware = SubscriberMiddleware.Create<TMiddleware>(serviceLifetime);
         _messageConfiguration.SubscriberMiddleware.Add(subscriberMiddleware);
@@ -359,7 +359,6 @@ public class MessageBusBuilder : IMessageBusBuilder
             var mappingParam = Expression.Parameter(typeof(SubscriberMapping), "mapping");
             var tokenParam = Expression.Parameter(typeof(CancellationToken), "token");
 
-            // invoker.InvokeAsync<T>( (MessageEnvelope<T>) envelope, mapping, token )
             var genericMethodDef = typeof(HandlerInvoker)
                 .GetMethods(BindingFlags.Public | BindingFlags.Instance)
                 .First(m => m.Name == nameof(HandlerInvoker.InvokeAsync) && m.IsGenericMethodDefinition)

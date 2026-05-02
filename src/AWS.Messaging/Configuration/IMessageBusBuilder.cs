@@ -59,10 +59,10 @@ public interface IMessageBusBuilder
     /// <remarks>
     /// Middleware will be executed in the order in which it is added.
     /// </remarks>
-    /// <typeparam name="TMiddleware">The type that implements <see cref="IMiddleware"/></typeparam>
+    /// <typeparam name="TMiddleware">The type that implements <see cref="IHandlerMiddleware"/></typeparam>
     /// <param name="serviceLifetime">The lifetime of the middleware.</param>
     IMessageBusBuilder AddMiddleware<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TMiddleware>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
-        where TMiddleware : class, IMiddleware;
+        where TMiddleware : class, IHandlerMiddleware;
 
     /// <summary>
     /// Adds a message error handler to the subscriber pipeline.

@@ -315,10 +315,10 @@ You can return `MessageProcessStatus.Success()` to indicate that the message was
 
 You can add middleware to the subscriber message processing pipeline. Middleware executes in the order it is registered, wrapping around the message handler. This is useful for cross-cutting concerns such as logging, metrics, message enrichment, or custom retry logic.
 
-To create middleware, implement the `IMiddleware` interface:
+To create middleware, implement the `IHandlerMiddleware` interface:
 
 ```csharp
-public class LoggingMiddleware : IMiddleware
+public class LoggingMiddleware : IHandlerMiddleware
 {
     private readonly ILogger<LoggingMiddleware> _logger;
 

@@ -75,7 +75,7 @@ public class HandlerInvoker : IHandlerInvoker
                             throw new InvalidMessageHandlerSignatureException($"Unable to resolve a handler for {subscriberMapping.HandlerType} while handling message ID {messageEnvelope.Id}.", ex);
                         }
 
-                        var middlewares = _messageConfiguration.SubscriberMiddleware.Select(type => (IMiddleware)scope.ServiceProvider.GetRequiredService(type.Type)!).ToList();
+                        var middlewares = _messageConfiguration.SubscriberMiddleware.Select(type => (IHandlerMiddleware)scope.ServiceProvider.GetRequiredService(type.Type)!).ToList();
                         return await ExecutePipelineAsync(messageEnvelope, middlewares, handler, token).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is not InvalidMessageHandlerSignatureException)
@@ -137,7 +137,7 @@ public class HandlerInvoker : IHandlerInvoker
         }
     }
 
-    private static async Task<MessageProcessStatus> ExecutePipelineAsync<T>(MessageEnvelope<T> messageEnvelope, List<IMiddleware> middlewares, IMessageHandler<T> handler, CancellationToken token)
+    private static async Task<MessageProcessStatus> ExecutePipelineAsync<T>(MessageEnvelope<T> messageEnvelope, List<IHandlerMiddleware> middlewares, IMessageHandler<T> handler, CancellationToken token)
     {
         RequestDelegate next = () => handler.HandleAsync(messageEnvelope, token);
 

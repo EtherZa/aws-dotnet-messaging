@@ -1,4 +1,4 @@
-﻿# AWS Message Processing Framework Subscriber Service Sample
+# AWS Message Processing Framework Subscriber Service Sample
 
 This sample application demonstrates how to use the AWS Message Processing Framework for .NET to process messages from SQS queues with configurable polling and message handling.
 
@@ -33,7 +33,7 @@ SubscriberService/
 
 ## Middleware
 
-This sample includes `SampleMiddleware` to demonstrate the subscriber middleware feature. Middleware implements the `IMiddleware` interface and is registered using `builder.AddMiddleware<SampleMiddleware>()` in `Program.cs`. Middleware executes in registration order, wrapping around the message handler, and is useful for cross-cutting concerns such as logging, metrics, or message enrichment. See the main [README](../../README.md#subscriber-middleware) for more details.
+This sample includes `SampleMiddleware` to demonstrate the subscriber middleware feature. Middleware implements the `IHandlerMiddleware` interface and is registered using `builder.AddMiddleware<SampleMiddleware>()` in `Program.cs`. Middleware executes in registration order, wrapping around the message handler, and is useful for cross-cutting concerns such as logging, metrics, or message enrichment. See the main [README](../../README.md#subscriber-middleware) for more details.
 
 ## Testing
 
