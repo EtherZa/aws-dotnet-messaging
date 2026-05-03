@@ -120,7 +120,7 @@ public class MessageBusBuilder : IMessageBusBuilder
         return this;
     }
 
-    public IMessageBusBuilder AddMiddleware<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TMiddleware>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
+    public IMessageBusBuilder AddHandlerMiddleware<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TMiddleware>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
         where TMiddleware : class, IHandlerMiddleware
     {
         var subscriberMiddleware = SubscriberMiddleware.Create<TMiddleware>(serviceLifetime);

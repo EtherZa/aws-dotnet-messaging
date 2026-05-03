@@ -232,9 +232,9 @@ public class HandlerInvokerTests
             {
                 builder.AddMessageHandler<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>("sqsQueueUrl");
 
-                builder.AddMiddleware<SubscriberMiddlewareModels.A>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.B>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.C>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.A>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.B>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.C>();
             });
 
         var middlewareTracker = new SubscriberMiddlewareModels.MiddlewareTracker();
@@ -272,9 +272,9 @@ public class HandlerInvokerTests
             {
                 builder.AddMessageHandler<SubscriberMiddlewareModels.FailMessageHandler<ChatMessage>, ChatMessage>("sqsQueueUrl");
 
-                builder.AddMiddleware<SubscriberMiddlewareModels.A>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.B>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.C>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.A>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.B>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.C>();
             });
 
         var middlewareTracker = new SubscriberMiddlewareModels.MiddlewareTracker();
@@ -490,7 +490,7 @@ public class HandlerInvokerTests
                 builder.AddMessageHandler<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>("chatMessage");
                 builder.AddMessageHandler<SubscriberMiddlewareModels.FailMessageHandler<AddressInfo>, AddressInfo>("addressInfo");
 
-                builder.AddMiddleware<SubscriberMiddlewareModels.A>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.A>();
             });
 
         var middlewareTracker = new SubscriberMiddlewareModels.MiddlewareTracker();
@@ -537,9 +537,9 @@ public class HandlerInvokerTests
             {
                 builder.AddMessageHandler<SubscriberMiddlewareModels.SuccessMessageHandler<ChatMessage>, ChatMessage>("sqsQueueUrl");
 
-                builder.AddMiddleware<SubscriberMiddlewareModels.A>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.ShortCircuit>();
-                builder.AddMiddleware<SubscriberMiddlewareModels.B>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.A>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.ShortCircuit>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.B>();
             });
 
         var middlewareTracker = new SubscriberMiddlewareModels.MiddlewareTracker();
@@ -577,7 +577,7 @@ public class HandlerInvokerTests
             .AddAWSMessageBus(builder =>
             {
                 builder.AddMessageHandler<ChatMessageHandler, ChatMessage>("sqsQueueUrl");
-                builder.AddMiddleware<SubscriberMiddlewareModels.CancellationAwareMiddleware>();
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.CancellationAwareMiddleware>();
             });
 
         var serviceProvider = serviceCollection.BuildServiceProvider();
@@ -617,7 +617,7 @@ public class HandlerInvokerTests
                 builder.AddMessageHandler<ChatMessageHandler, ChatMessage>("sqsQueueUrl");
 
                 // Register as Scoped - each invocation should get a new DI scope and thus a new instance
-                builder.AddMiddleware<SubscriberMiddlewareModels.InstanceTrackingMiddleware>(ServiceLifetime.Scoped);
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.InstanceTrackingMiddleware>(ServiceLifetime.Scoped);
             });
 
         var serviceProvider = serviceCollection.BuildServiceProvider();
@@ -648,7 +648,7 @@ public class HandlerInvokerTests
             .AddAWSMessageBus(builder =>
             {
                 builder.AddMessageHandler<ChatMessageHandler, ChatMessage>("sqsQueueUrl");
-                builder.AddMiddleware<SubscriberMiddlewareModels.InstanceTrackingMiddleware>(ServiceLifetime.Singleton);
+                builder.AddHandlerMiddleware<SubscriberMiddlewareModels.InstanceTrackingMiddleware>(ServiceLifetime.Singleton);
             });
 
         var singletonServiceProvider = singletonServiceCollection.BuildServiceProvider();

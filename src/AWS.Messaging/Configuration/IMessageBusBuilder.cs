@@ -61,7 +61,7 @@ public interface IMessageBusBuilder
     /// </remarks>
     /// <typeparam name="TMiddleware">The type that implements <see cref="IHandlerMiddleware"/></typeparam>
     /// <param name="serviceLifetime">The lifetime of the middleware.</param>
-    IMessageBusBuilder AddMiddleware<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TMiddleware>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
+    IMessageBusBuilder AddHandlerMiddleware<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TMiddleware>(ServiceLifetime serviceLifetime = ServiceLifetime.Singleton)
         where TMiddleware : class, IHandlerMiddleware;
 
     /// <summary>

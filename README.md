@@ -345,7 +345,7 @@ public class LoggingMiddleware : IHandlerMiddleware
 }
 ```
 
-Register middleware during startup using `AddMiddleware`. Middleware is registered as a singleton by default, but you can configure its service lifetime:
+Register middleware during startup using `AddHandlerMiddleware`. Middleware is registered as a singleton by default, but you can configure its service lifetime:
 
 ```csharp
 services.AddAWSMessageBus(builder =>
@@ -354,11 +354,11 @@ services.AddAWSMessageBus(builder =>
     builder.AddMessageHandler<ChatMessageHandler, ChatMessage>();
 
     // Add middleware - executes in registration order
-    builder.AddMiddleware<LoggingMiddleware>();
-    builder.AddMiddleware<MetricsMiddleware>();
+    builder.AddHandlerMiddleware<LoggingMiddleware>();
+    builder.AddHandlerMiddleware<MetricsMiddleware>();
 
     // Optionally specify a different service lifetime
-    builder.AddMiddleware<ScopedMiddleware>(ServiceLifetime.Scoped);
+    builder.AddHandlerMiddleware<ScopedMiddleware>(ServiceLifetime.Scoped);
 });
 ```
 
